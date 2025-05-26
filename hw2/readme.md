@@ -3,7 +3,9 @@
 Here's how I tackled each question for Homework 2.
 
 ## Q1. Install MLflow
-First up, checked my MLflow version. Popped open the terminal and ran `mlflow --version`. Looks like I'm running version 2.22.0.
+`mlflow --version`.
+
+ mlflow version 2.22.0.
 
 *(MLflow UI)*
 ![MLflow UI Screenshot](./images/mlflowui.png)
@@ -11,7 +13,7 @@ First up, checked my MLflow version. Popped open the terminal and ran `mlflow --
 ## Q2. Download and preprocess the data
 Ans: 4
 
-Next, I ran the [`preprocess_data.py`](preprocess_data.py) script. This thing takes the raw taxi data, uses `DictVectorizer` on the January 2023 data to get it ready for training, and then saves out `train.pkl`, `val.pkl`, `test.pkl`, and the `dv.pkl` (the DictVectorizer itself). Ended up with 4 files in my output folder.
+Next, I ran the [`preprocess_data.py`](preprocess_data.py) script. This thing takes the raw taxi data, uses `DictVectorizer` on the January 2023 data to get it ready for training, and then saves out `train.pkl`, `val.pkl`, `test.pkl`, and the `dv.pkl` (the DictVectorizer itself). 
 
 ## Q3. Train a model with autolog
 Ans: 2
