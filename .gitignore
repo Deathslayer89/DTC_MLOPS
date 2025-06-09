@@ -1,7 +1,6 @@
 *.parquet
 
 learn/
-data/
 mlruns/
 output/
 artifacts/
