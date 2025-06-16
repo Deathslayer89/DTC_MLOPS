@@ -1,0 +1,12 @@
+FROM agrigorev/zoomcamp-model:mlops-2024-3.10.13-slim
+
+WORKDIR /app
+
+# Copy the script
+COPY script.py .
+
+# Install required packages
+RUN pip install pandas pyarrow requests scikit-learn==1.6.1
+
+# Run the script for May 2023
+ENTRYPOINT ["python", "script.py", "--year", "2023", "--month", "5"]
