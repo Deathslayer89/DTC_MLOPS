@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  localstack:
+    container_name: localstack-s3
+    image: localstack/localstack
+    ports:
+      - "4566:4566"   # Edge port – all AWS services via a single entrypoint
+    environment:
+      - SERVICES=s3
+      - DEBUG=1
+      - DATA_DIR=/tmp/localstack/data
+    volumes:
+      - "./volume:/var/lib/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock" 
