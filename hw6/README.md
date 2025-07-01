@@ -1,4 +1,4 @@
-# MLOps Homework 6 - Testing
+# MLOps Homework 6 
 
 ## Files
 - [`batch.py`](batch.py) - Main prediction service
@@ -15,7 +15,7 @@ pip install pytest pandas scikit-learn boto3 pyarrow
 # Start Localstack
 docker-compose up -d
 
-# Create test model
+# Create test model or use thet model.bin given in assignment for the correct results
 python create_model.py
 
 # Run unit tests
@@ -53,17 +53,8 @@ Run integration test and check output:
 ```bash
 PYTHONPATH=. python tests/integration_test.py
 ```
-- Q5: Look for "Input file size: X bytes"
-- Q6: Look for "Sum of predicted durations: X"
-
-## Expected Answers
-
-1. Q1: Code is already properly refactored
-2. Q2: `__init__.py` needed in tests directory
-3. Q3: 2 rows remain after filtering
-4. Q4: `--endpoint-url` is the correct option
-5. Q5: File size should be around 3620 bytes
-6. Q6: The sum will be shown in integration test output
+- Q5: 3620 bytes
+- Q6: 36.277
 
 ## Troubleshooting
 
