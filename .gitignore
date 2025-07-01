@@ -4,3 +4,4 @@ learn/
 mlruns/
 output/
 artifacts/
+__pycache__/
