@@ -77,3 +77,5 @@ sudo apt install awscli
 ```
 
 No real AWS credentials are needed - we're using Localstack with dummy credentials. 
+
+

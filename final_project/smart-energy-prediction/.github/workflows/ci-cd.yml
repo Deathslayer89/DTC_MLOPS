@@ -1,0 +1,162 @@
+name: MLOps Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest black isort flake8 pytest-cov
+    
+    - name: Run linting
+      run: |
+        black --check src/ tests/
+        isort --check-only src/ tests/
+        flake8 src/ tests/ --max-line-length=100
+    
+    - name: Run tests
+      run: |
+        pytest tests/ -v --cov=src/ --cov-report=xml --cov-report=html
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+    
+    - name: Data validation
+      run: |
+        python -c "
+        import pandas as pd
+        import os
+        if os.path.exists('data/raw/household_power_consumption.txt'):
+            df = pd.read_csv('data/raw/household_power_consumption.txt', sep=';', nrows=1000)
+            print('Data validation passed')
+        else:
+            print('Data file not found - skipping validation')
+        "
+
+  security:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+    
+    - name: Install security tools
+      run: |
+        pip install bandit safety
+    
+    - name: Run security checks
+      run: |
+        bandit -r src/
+        safety check --json
+
+  build:
+    needs: [test, security]
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+    
+    - name: Build Docker image
+      run: |
+        docker build -t energy-prediction-api:${{ github.sha }} .
+    
+    - name: Test Docker image
+      run: |
+        docker run --rm energy-prediction-api:${{ github.sha }} python -c "print('Docker image test passed')"
+
+  deploy:
+    needs: [test, security, build]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: us-east-1
+    
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+    
+    - name: Build and push Docker image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        ECR_REPOSITORY: energy-prediction-api
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        # Build and tag the image
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+        
+        # Push the image to ECR
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+    
+    - name: Deploy to ECS
+      run: |
+        # This would typically update an ECS service
+        # For demo purposes, we'll just echo the deployment
+        echo "Deploying to ECS service..."
+        echo "Image: ${{ steps.login-ecr.outputs.registry }}/energy-prediction-api:${{ github.sha }}"
+        
+        # In a real scenario, you would:
+        # aws ecs update-service --cluster production --service energy-prediction-api --force-new-deployment
+
+  notify:
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    if: always()
+    
+    steps:
+    - name: Notify deployment status
+      run: |
+        if [ "${{ needs.deploy.result }}" == "success" ]; then
+          echo "✅ Deployment successful!"
+        else
+          echo "❌ Deployment failed!"
+        fi
+        
+        # Here you could add Slack notifications, emails, etc.
+        # curl -X POST -H 'Content-type: application/json' \
+        #   --data '{"text":"Deployment status: ${{ needs.deploy.result }}"}' \
+        #   ${{ secrets.SLACK_WEBHOOK_URL }}

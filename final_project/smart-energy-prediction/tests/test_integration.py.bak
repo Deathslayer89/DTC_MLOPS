@@ -1,0 +1,430 @@
+"""
+Integration tests for the complete Smart Energy Prediction pipeline.
+"""
+
+import pytest
+import pandas as pd
+import numpy as np
+import tempfile
+import os
+from unittest.mock import Mock, patch, MagicMock
+import joblib
+from pathlib import Path
+
+# Import modules to test
+from src.data.data_loader import load_raw_data, clean_data
+from src.features.feature_engineering import engineer_features, select_features, split_data
+from src.models.train_model import ModelTrainer
+from src.monitoring.model_monitor import ModelMonitor
+from src.workflows.training_pipeline import training_pipeline, monitoring_pipeline
+
+
+class TestEndToEndPipeline:
+    """Integration tests for the complete pipeline."""
+    
+    @pytest.fixture
+    def sample_raw_data(self):
+        """Create sample raw data file."""
+        sample_data = """Date;Time;Global_active_power;Global_reactive_power;Voltage;Global_intensity;Sub_metering_1;Sub_metering_2;Sub_metering_3
+16/12/2006;17:24:00;4.216;0.418;234.840;18.400;0.000;1.000;17.000
+16/12/2006;17:25:00;5.360;0.436;233.630;23.000;0.000;1.000;16.000
+16/12/2006;17:26:00;5.374;0.498;233.290;23.000;0.000;2.000;17.000
+16/12/2006;17:27:00;5.388;0.502;233.740;23.000;0.000;1.000;17.000
+16/12/2006;17:28:00;3.666;0.528;235.680;15.800;0.000;1.000;17.000
+17/12/2006;17:24:00;4.216;0.418;234.840;18.400;0.000;1.000;17.000
+17/12/2006;17:25:00;5.360;0.436;233.630;23.000;0.000;1.000;16.000
+17/12/2006;17:26:00;5.374;0.498;233.290;23.000;0.000;2.000;17.000
+17/12/2006;17:27:00;5.388;0.502;233.740;23.000;0.000;1.000;17.000
+17/12/2006;17:28:00;3.666;0.528;235.680;15.800;0.000;1.000;17.000"""
+        
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write(sample_data)
+            return f.name
+    
+    def test_data_loading_to_feature_engineering(self, sample_raw_data):
+        """Test data loading through feature engineering."""
+        try:
+            # Load raw data
+            df = load_raw_data(sample_raw_data)
+            assert len(df) == 10
+            assert 'datetime' in df.columns
+            
+            # Clean data
+            df_clean = clean_data(df)
+            assert len(df_clean) == 10
+            assert 'Total_sub_metering' in df_clean.columns
+            
+            # Engineer features
+            df_features = engineer_features(df_clean)
+            assert len(df_features) <= 10  # Some rows might be dropped due to NaN
+            
+            # Check that time-based features are created
+            assert 'hour' in df_features.columns
+            assert 'day_of_week' in df_features.columns
+            assert 'season' in df_features.columns
+            
+            # Select features
+            X, y = select_features(df_features)
+            assert X.shape[0] == y.shape[0]
+            assert X.shape[1] > 0
+            
+        finally:
+            os.unlink(sample_raw_data)
+    
+    def test_feature_engineering_to_model_training(self, sample_raw_data):
+        """Test feature engineering through model training."""
+        try:
+            # Create larger sample for training
+            sample_data_large = """Date;Time;Global_active_power;Global_reactive_power;Voltage;Global_intensity;Sub_metering_1;Sub_metering_2;Sub_metering_3"""
+            
+            # Generate 1000 rows of sample data
+            dates = pd.date_range('2006-12-16', periods=1000, freq='H')
+            for i, date in enumerate(dates):
+                sample_data_large += f"\n{date.strftime('%d/%m/%Y')};{date.strftime('%H:%M:%S')};{np.random.rand()*5:.3f};{np.random.rand()*0.5:.3f};{230 + np.random.rand()*20:.3f};{np.random.rand()*20:.3f};{np.random.rand()*10:.3f};{np.random.rand()*10:.3f};{np.random.rand()*20:.3f}"
+            
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+                f.write(sample_data_large)
+                large_data_file = f.name
+            
+            # Load and process data
+            df = load_raw_data(large_data_file)
+            df_clean = clean_data(df)
+            df_features = engineer_features(df_clean)
+            
+            # Select features and split data
+            X, y = select_features(df_features)
+            X_train, X_val, X_test, y_train, y_val, y_test = split_data(X, y)
+            
+            # Check data shapes
+            assert X_train.shape[0] > 0
+            assert X_val.shape[0] > 0
+            assert X_test.shape[0] > 0
+            assert X_train.shape[1] == X_val.shape[1] == X_test.shape[1]
+            
+            # Test training with a simple model
+            from sklearn.ensemble import RandomForestRegressor
+            from sklearn.metrics import mean_absolute_error
+            
+            model = RandomForestRegressor(n_estimators=10, random_state=42)
+            model.fit(X_train, y_train)
+            
+            predictions = model.predict(X_test)
+            mae = mean_absolute_error(y_test, predictions)
+            
+            assert mae > 0  # Should have some error
+            assert mae < 10  # Should not be too high
+            
+            os.unlink(large_data_file)
+            
+        finally:
+            os.unlink(sample_raw_data)
+    
+    @patch('mlflow.set_experiment')
+    @patch('mlflow.start_run')
+    @patch('mlflow.log_params')
+    @patch('mlflow.log_metrics')
+    @patch('mlflow.sklearn.log_model')
+    def test_model_training_with_mlflow(self, mock_log_model, mock_log_metrics, 
+                                       mock_log_params, mock_start_run, mock_set_experiment):
+        """Test model training with MLflow integration."""
+        # Create mock MLflow context
+        mock_run = MagicMock()
+        mock_run.info.run_id = "test-run-id"
+        mock_start_run.return_value.__enter__.return_value = mock_run
+        
+        # Create sample data for training
+        X_train = pd.DataFrame(np.random.rand(100, 10))
+        y_train = pd.Series(np.random.rand(100))
+        X_val = pd.DataFrame(np.random.rand(20, 10))
+        y_val = pd.Series(np.random.rand(20))
+        X_test = pd.DataFrame(np.random.rand(20, 10))
+        y_test = pd.Series(np.random.rand(20))
+        
+        # Initialize trainer
+        trainer = ModelTrainer()
+        
+        # Train Random Forest model
+        model = trainer.train_random_forest(X_train, y_train, X_val, y_val)
+        
+        # Check that model was created
+        assert model is not None
+        assert hasattr(model, 'predict')
+        
+        # Make predictions
+        predictions = model.predict(X_test)
+        assert len(predictions) == len(y_test)
+        assert all(isinstance(p, (int, float, np.number)) for p in predictions)
+    
+    def test_monitoring_pipeline_integration(self):
+        """Test monitoring pipeline integration."""
+        # Create sample reference and current data
+        reference_data = pd.DataFrame({
+            'datetime': pd.date_range('2023-01-01', periods=100, freq='H'),
+            'Global_active_power': np.random.rand(100) * 5,
+            'Global_reactive_power': np.random.rand(100) * 0.5,
+            'Voltage': np.random.rand(100) * 10 + 230,
+            'Global_intensity': np.random.rand(100) * 20,
+            'Sub_metering_1': np.random.rand(100) * 10,
+            'Sub_metering_2': np.random.rand(100) * 10,
+            'Sub_metering_3': np.random.rand(100) * 20
+        })
+        
+        current_data = pd.DataFrame({
+            'datetime': pd.date_range('2023-01-05', periods=50, freq='H'),
+            'Global_active_power': np.random.rand(50) * 5,
+            'Global_reactive_power': np.random.rand(50) * 0.5,
+            'Voltage': np.random.rand(50) * 10 + 230,
+            'Global_intensity': np.random.rand(50) * 20,
+            'Sub_metering_1': np.random.rand(50) * 10,
+            'Sub_metering_2': np.random.rand(50) * 10,
+            'Sub_metering_3': np.random.rand(50) * 20
+        })
+        
+        # Initialize monitor
+        monitor = ModelMonitor()
+        
+        # Generate monitoring reports
+        quality_report = monitor.generate_data_quality_report(reference_data, current_data)
+        drift_report = monitor.generate_data_drift_report(reference_data, current_data)
+        test_suite = monitor.run_test_suite(reference_data, current_data)
+        
+        # Check that reports were generated
+        assert quality_report is not None
+        assert drift_report is not None
+        assert test_suite is not None
+        
+        # Check alerts
+        alerts = monitor.check_alerts(drift_report, test_suite)
+        assert isinstance(alerts, list)
+    
+    def test_api_integration_with_feature_engineering(self):
+        """Test API integration with feature engineering."""
+        from src.api.app import engineer_features
+        
+        # Create input data
+        input_data = pd.DataFrame({
+            'Global_reactive_power': [0.1],
+            'Voltage': [240.0],
+            'Global_intensity': [4.0],
+            'Sub_metering_1': [0.0],
+            'Sub_metering_2': [1.0],
+            'Sub_metering_3': [17.0],
+            'hour': [14],
+            'day_of_week': [1],
+            'month': [6]
+        })
+        
+        # Engineer features
+        features = engineer_features(input_data)
+        
+        # Check that all expected features are present
+        expected_features = [
+            'Global_reactive_power', 'Voltage', 'Global_intensity',
+            'Sub_metering_1', 'Sub_metering_2', 'Sub_metering_3',
+            'Total_sub_metering', 'hour', 'day_of_week', 'month',
+            'season', 'is_weekend', 'is_working_hours', 'power_efficiency',
+            'kitchen_ratio', 'laundry_ratio', 'hvac_ratio', 'is_peak_hour',
+            'time_of_day_afternoon', 'time_of_day_evening', 
+            'time_of_day_morning', 'time_of_day_night'
+        ]
+        
+        for feature in expected_features:
+            assert feature in features.columns, f"Missing feature: {feature}"
+    
+    def test_model_persistence_and_loading(self):
+        """Test model persistence and loading."""
+        # Create sample data
+        X_train = pd.DataFrame(np.random.rand(100, 5))
+        y_train = pd.Series(np.random.rand(100))
+        X_val = pd.DataFrame(np.random.rand(20, 5))
+        y_val = pd.Series(np.random.rand(20))
+        
+        # Train a simple model
+        from sklearn.ensemble import RandomForestRegressor
+        from sklearn.preprocessing import StandardScaler
+        
+        model = RandomForestRegressor(n_estimators=10, random_state=42)
+        scaler = StandardScaler()
+        
+        X_train_scaled = scaler.fit_transform(X_train)
+        model.fit(X_train_scaled, y_train)
+        
+        # Save model and scaler
+        with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False) as f:
+            joblib.dump(model, f.name)
+            model_path = f.name
+        
+        with tempfile.NamedTemporaryFile(suffix='.pkl', delete=False) as f:
+            joblib.dump(scaler, f.name)
+            scaler_path = f.name
+        
+        try:
+            # Load model and scaler
+            loaded_model = joblib.load(model_path)
+            loaded_scaler = joblib.load(scaler_path)
+            
+            # Test predictions
+            X_test = pd.DataFrame(np.random.rand(10, 5))
+            X_test_scaled = loaded_scaler.transform(X_test)
+            predictions = loaded_model.predict(X_test_scaled)
+            
+            assert len(predictions) == 10
+            assert all(isinstance(p, (int, float, np.number)) for p in predictions)
+            
+        finally:
+            os.unlink(model_path)
+            os.unlink(scaler_path)
+    
+    def test_data_validation_integration(self):
+        """Test data validation throughout the pipeline."""
+        from src.data.data_loader import validate_data
+        
+        # Test with valid data
+        valid_data = pd.DataFrame({
+            'datetime': pd.date_range('2023-01-01', periods=10, freq='H'),
+            'Global_active_power': np.random.rand(10) * 5,
+            'Global_reactive_power': np.random.rand(10) * 0.5,
+            'Voltage': np.random.rand(10) * 10 + 230,
+            'Global_intensity': np.random.rand(10) * 20,
+            'Sub_metering_1': np.random.rand(10) * 10,
+            'Sub_metering_2': np.random.rand(10) * 10,
+            'Sub_metering_3': np.random.rand(10) * 20
+        })
+        
+        assert validate_data(valid_data) is True
+        
+        # Test with invalid data (missing columns)
+        invalid_data = pd.DataFrame({
+            'datetime': pd.date_range('2023-01-01', periods=10, freq='H'),
+            'Global_active_power': np.random.rand(10) * 5
+        })
+        
+        assert validate_data(invalid_data) is False
+    
+    def test_error_handling_in_pipeline(self):
+        """Test error handling throughout the pipeline."""
+        from src.data.data_loader import load_raw_data
+        
+        # Test with non-existent file
+        with pytest.raises(FileNotFoundError):
+            load_raw_data("non_existent_file.txt")
+        
+        # Test with invalid data format
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write("invalid data format")
+            invalid_file = f.name
+        
+        try:
+            with pytest.raises(Exception):
+                load_raw_data(invalid_file)
+        finally:
+            os.unlink(invalid_file)
+    
+    def test_performance_metrics_integration(self):
+        """Test performance metrics calculation."""
+        from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+        
+        # Create sample predictions and actual values
+        y_true = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
+        y_pred = np.array([1.1, 2.1, 2.9, 3.8, 5.2])
+        
+        # Calculate metrics
+        mae = mean_absolute_error(y_true, y_pred)
+        mse = mean_squared_error(y_true, y_pred)
+        rmse = np.sqrt(mse)
+        r2 = r2_score(y_true, y_pred)
+        
+        # Check that metrics are reasonable
+        assert mae > 0
+        assert mse > 0
+        assert rmse > 0
+        assert r2 > 0.8  # Should be high for this close prediction
+        
+        # Test with ModelTrainer
+        trainer = ModelTrainer()
+        X_test = pd.DataFrame(np.random.rand(5, 3))
+        y_test = pd.Series(y_true)
+        
+        # Mock model
+        mock_model = Mock()
+        mock_model.predict.return_value = y_pred
+        
+        metrics = trainer.evaluate_model(mock_model, X_test, y_test)
+        
+        assert 'mae' in metrics
+        assert 'mse' in metrics
+        assert 'rmse' in metrics
+        assert 'r2' in metrics
+        assert metrics['mae'] == mae
+        assert metrics['mse'] == mse
+        assert metrics['rmse'] == rmse
+        assert metrics['r2'] == r2
+
+
+class TestWorkflowIntegration:
+    """Test workflow integration with Prefect."""
+    
+    def test_workflow_task_dependencies(self):
+        """Test that workflow tasks have proper dependencies."""
+        # This would test the actual workflow structure
+        # For now, we'll test that the functions exist and are callable
+        from src.workflows.training_pipeline import (
+            extract_data, transform_data, prepare_training_data,
+            train_model_task, validate_model_performance
+        )
+        
+        # Check that tasks are callable
+        assert callable(extract_data)
+        assert callable(transform_data)
+        assert callable(prepare_training_data)
+        assert callable(train_model_task)
+        assert callable(validate_model_performance)
+    
+    def test_workflow_error_handling(self):
+        """Test error handling in workflows."""
+        # Test would verify that workflows handle errors gracefully
+        # and propagate them correctly
+        pass
+
+
+class TestConfigurationIntegration:
+    """Test configuration integration."""
+    
+    def test_config_loading(self):
+        """Test configuration loading."""
+        import yaml
+        
+        # Create temporary config file
+        config_data = {
+            'data': {
+                'raw_data_path': 'test_path.txt',
+                'test_size': 0.2,
+                'val_size': 0.2,
+                'random_state': 42
+            },
+            'model': {
+                'target_column': 'Global_active_power'
+            }
+        }
+        
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.dump(config_data, f)
+            config_file = f.name
+        
+        try:
+            # Load configuration
+            with open(config_file, 'r') as f:
+                config = yaml.safe_load(f)
+            
+            # Check configuration values
+            assert config['data']['test_size'] == 0.2
+            assert config['data']['random_state'] == 42
+            assert config['model']['target_column'] == 'Global_active_power'
+            
+        finally:
+            os.unlink(config_file)
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

@@ -1,0 +1,83 @@
+# Configuration for Smart Energy Prediction MLOps Project
+
+# Data Configuration
+data:
+  raw_data_path: "data/raw/household_power_consumption.txt"
+  processed_data_path: "data/processed/processed_energy_data.csv"
+  test_size: 0.2
+  val_size: 0.2
+  random_state: 42
+
+# Model Configuration
+model:
+  target_column: "Global_active_power"
+  feature_columns:
+    - "Global_reactive_power"
+    - "Voltage"
+    - "Global_intensity"
+    - "Sub_metering_1"
+    - "Sub_metering_2"
+    - "Sub_metering_3"
+    - "Total_sub_metering"
+    - "hour"
+    - "day_of_week"
+    - "month"
+    - "season"
+  
+  models:
+    - name: "random_forest"
+      class: "RandomForestRegressor"
+      params:
+        n_estimators: 100
+        max_depth: 20
+        min_samples_split: 5
+        random_state: 42
+    
+    - name: "xgboost"
+      class: "XGBRegressor"
+      params:
+        n_estimators: 100
+        max_depth: 6
+        learning_rate: 0.1
+        random_state: 42
+    
+    - name: "lightgbm"
+      class: "LGBMRegressor"
+      params:
+        n_estimators: 100
+        max_depth: 6
+        learning_rate: 0.1
+        random_state: 42
+
+# MLflow Configuration
+mlflow:
+  experiment_name: "energy-consumption-prediction"
+  tracking_uri: "sqlite:///mlruns.db"
+  model_registry_uri: "sqlite:///mlruns.db"
+  artifact_location: "mlruns"
+
+# API Configuration
+api:
+  host: "0.0.0.0"
+  port: 8000
+  reload: false
+  workers: 4
+
+# Monitoring Configuration
+monitoring:
+  reference_data_size: 10000
+  drift_threshold: 0.1
+  performance_threshold: 0.5
+  report_path: "reports/"
+
+# Infrastructure Configuration
+infrastructure:
+  aws_region: "us-east-1"
+  s3_bucket: "smart-energy-mlops"
+  ec2_instance_type: "t3.medium"
+  
+# Logging Configuration
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/app.log"
