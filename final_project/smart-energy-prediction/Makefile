@@ -70,7 +70,7 @@ mlflow:
 # Run complete pipeline (automated)
 all:
 	@echo "🚀 Running complete MLOps pipeline..."
-	python run_pipeline.py
+	python src/workflows/training_pipeline.py
 
 # Quick start - most common workflow
 quick:
@@ -104,7 +104,7 @@ clean:
 # Build Docker containers
 docker:
 	@echo "🐳 Building Docker containers..."
-	docker build -t energy-prediction-api -f docker/Dockerfile .
+	docker build -t energy-prediction-api .
 	@echo "✅ Docker build completed"
 
 # Run code linting
